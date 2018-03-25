@@ -54,11 +54,11 @@ Run the following to install a locally editable version of the library, with pip
 `pip3 install --editable . --user`
 
 
-# Testing loadvid
+# Testing Lintel
 
 1. After installing, run:
 
-   `loadvid_test --filename <video-filename> --width <width> --height <height>`
+   `lintel_test --filename <video-filename> --width <width> --height <height>`
 
    Pass criteria: decoded frames from the video should show up without
    distortion, decoding each clip in < 500ms.
