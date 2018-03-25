@@ -71,7 +71,28 @@ follows:
 
 ```python
 def _load_video_to_4darray(video, dataset, should_random_seek, fps_cap):
-    """Decodes a video to a 4D numpy array."""
+    """Decodes a video to a 4D numpy array, supporting random seeking.
+
+    Args:
+        video: Encoded video.
+        dataset: Dataset meta-info, e.g., width and height.
+        should_random_seek: If set to `True`, then `lintel.loadvid` will start
+            decoding from a uniformly random seek point in the video (with
+            enough space to decode the requested number of frames).
+
+            The seek distance will be returned, so that if the label of the
+            data depends on the timestamp, then the label can be dynamically
+            set.
+        fps_cap: The _maximum_ framerate that will be captured from the video.
+            Excess frames will be dropped, i.e., if `fps_cap` is 30 for a video
+            with a 60 fps framerate, every other frame will be dropped.
+
+    Returns:
+        A tuple (frames, seek_distance) where `frames` is a 4-D numpy array
+        loaded from the byte array returned by `lintel.loadvid`, and
+        `seek_distance` is the number of seconds into `video` that decoding
+        started from.
+    """
     video, seek_distance = lintel.loadvid(
         video,
         should_random_seek=should_random_seek,
@@ -97,7 +118,11 @@ def _load_frame_nums_to_4darray(video, dataset, frame_nums):
         dataset: Dataset meta-info, e.g., width and height.
         frame_nums: Indices of specific frame indices to decode, e.g.,
             [1, 10, 30, 35] will return four frames: the first, 10th, 30th and
-            35 frames in `video`.
+            35 frames in `video`. Indices must be in strictly increasing order.
+
+    Returns:
+        A numpy array, loaded from the byte array returned by
+        `lintel.loadvid_frame_nums`, containing the specified frames, decoded.
     """
     decoded_frames = lintel.loadvid_frame_nums(video,
                                                frame_nums=frame_nums,
