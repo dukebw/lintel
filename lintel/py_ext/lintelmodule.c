@@ -298,7 +298,7 @@ loadvid(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
                  * return a garbage buffer.
                  */
                 if (status == LOADVID_ERR_STREAM_INDEX)
-                        return (PyObject *)frames;
+                          goto return_frames;
 
                 return NULL;
         }
@@ -340,7 +340,8 @@ clean_up_av_frame:
                 return result;
         }
 
-        result = Py_BuildValue("Of", result, seek_distance);
+return_frames:
+        result = Py_BuildValue("Of", frames, seek_distance);
         Py_DECREF(frames);
 
         return result;

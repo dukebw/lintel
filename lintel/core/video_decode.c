@@ -390,7 +390,7 @@ find_video_stream_index(AVFormatContext *format_context)
         }
 
         if (stream_index >= format_context->nb_streams)
-                return VID_DECODE_EOF;
+                return VID_DECODE_FFMPEG_ERR;
 
         return stream_index;
 }
