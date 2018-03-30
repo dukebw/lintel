@@ -70,9 +70,10 @@ The `lintel.loadvid` interface can be used in a Python input pipeline as
 follows:
 
 ```python
-def _load_video_to_4darray(video, dataset, should_random_seek, fps_cap):
-    """Decodes a video to a 4D numpy array, supporting random seeking.
-
+def _sample_frame_sequence_to_4darray(video, dataset, should_random_seek, fps_cap):
+    """Called to extract a frame sequence `dataset.num_frames` long, sampled
+    uniformly from inside `video`, to a 4D numpy array.
+.
     Args:
         video: Encoded video.
         dataset: Dataset meta-info, e.g., width and height.
@@ -92,6 +93,16 @@ def _load_video_to_4darray(video, dataset, should_random_seek, fps_cap):
         loaded from the byte array returned by `lintel.loadvid`, and
         `seek_distance` is the number of seconds into `video` that decoding
         started from.
+
+    Note that the random seeking can be turned off.
+
+    Use _sample_frame_sequence_to_4darray in your PyTorch Dataset object, which
+    subclasses torch.utils.data.Dataset. Call _sample_frame_sequence_to_4darray
+    in __getitem__. This means that for every minibatch, for each example, a
+    random keyframe in the video is seeked to and num_frames frames are decoded
+    from there. num_frames would normally tend to be small (if you were going
+    to use them as input to a 3D ConvNet or optical flow algorithm), e.g., 32
+    frames.
     """
     video, seek_distance = lintel.loadvid(
         video,
