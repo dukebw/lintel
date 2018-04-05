@@ -199,16 +199,22 @@ loadvid_frame_nums(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
                 return NULL;
         }
 
-        const Py_ssize_t num_frames = PySequence_Size(frame_nums);
-        PyByteArrayObject *frames = alloc_pyarray(num_frames*width*height*3);
-        if (PyErr_Occurred() || (frames == NULL))
-                return (PyObject *)frames;
 
         struct video_stream_context vid_ctx;
         struct buffer_data input_buf = {.ptr = video_bytes,
                                         .offset_bytes = 0,
                                         .total_size_bytes = in_size_bytes};
         int32_t status = setup_vid_stream_context(&vid_ctx, &input_buf);
+
+	width = vid_ctx.codec_context->width;
+	height = vid_ctx.codec_context->height;
+
+	const Py_ssize_t num_frames = PySequence_Size(frame_nums);
+        PyByteArrayObject *frames = alloc_pyarray(num_frames*width*height*3);
+        if (PyErr_Occurred() || (frames == NULL))
+                return (PyObject *)frames;
+
+	
         if (status != LOADVID_SUCCESS) {
                 if (status == LOADVID_ERR_STREAM_INDEX)
                         return (PyObject *)frames;
@@ -252,7 +258,12 @@ clean_up:
         if (result != (PyObject *)frames)
                 Py_DECREF(frames);
 
-        return result;
+	PyObject* out = PyTuple_New(3);
+	PyTuple_SET_ITEM(out, 0, result);
+	//Py_INCREF(result);
+	PyTuple_SET_ITEM(out, 1, Py_BuildValue("i", width));
+	PyTuple_SET_ITEM(out, 2, Py_BuildValue("i", height));
+        return out;
 }
 
 static PyObject *
