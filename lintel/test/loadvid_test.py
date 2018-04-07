@@ -123,7 +123,7 @@ def _loadvid_test_frame_nums(filename,
               default=False,
               help='Whether to use the potentially frame-inaccurate seek.')
 @click.option('--start-frame',
-              default=None,
+              default=0,
               type=int,
               help='Which frame to start decoding from.')
 def loadvid_test(filename, width, height, test_name, should_seek, start_frame):
