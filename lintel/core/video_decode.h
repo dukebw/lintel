@@ -194,6 +194,13 @@ decode_video_to_out_buffer(uint8_t *dest,
  * @vid_ctx: Context needed to decode frames from the video stream.
  * @num_requested_frames: Number of frames requested to fill into `dest`.
  * @frame_numbers: A list of frame numbers to extract.
+ * @should_seek: If false, decoding will be frame-accurate by starting from the
+ * first frame in the video and counting frames. However, this method may be
+ * slow.
+ * Therefore, this `should_seek` flag can be set to true to cause a seek to the
+ * closest keyframe before the first desired frame index. Note that this makes
+ * the assumption of a fixed FPS, and for variable framerate videos the
+ * approximation of average PTS duration per frame is made to do the seek.
  *
  * If there are less than `num_requested_frames` to decode from the video
  * stream, then the initial frames are looped repeatedly until the end of the
@@ -203,6 +210,7 @@ void
 decode_video_from_frame_nums(uint8_t *dest,
                              struct video_stream_context *vid_ctx,
                              int32_t num_requested_frames,
-                             const int32_t *frame_numbers);
+                             const int32_t *frame_numbers,
+                             bool should_seek);
 
 #endif // _VIDEO_DECODE_H_

@@ -55,7 +55,11 @@ def _loadvid_test_vanilla(filename, width, height):
         plt.show()
 
 
-def _loadvid_test_frame_nums(filename, width, height):
+def _loadvid_test_frame_nums(filename,
+                             width,
+                             height,
+                             start_frame,
+                             should_seek):
     """Tests loadvid_frame_nums Python extension.
 
     `loadvid_frame_nums` takes a list of (strictly increasing, and not
@@ -73,7 +77,7 @@ def _loadvid_test_frame_nums(filename, width, height):
     for _ in range(10):
         start = time.perf_counter()
 
-        i = 0
+        i = start_frame
         frame_nums = []
         for _ in range(num_frames):
             i += int(random.uniform(1, 4))
@@ -82,7 +86,8 @@ def _loadvid_test_frame_nums(filename, width, height):
         decoded_frames = lintel.loadvid_frame_nums(encoded_video,
                                                    frame_nums=frame_nums,
                                                    width=width,
-                                                   height=height)
+                                                   height=height,
+                                                   should_seek=should_seek)
         decoded_frames = np.frombuffer(decoded_frames, dtype=np.uint8)
         decoded_frames = np.reshape(decoded_frames,
                                     newshape=(num_frames, height, width, 3))
@@ -107,7 +112,21 @@ def _loadvid_test_frame_nums(filename, width, height):
               default=None,
               type=int,
               help='The _exact_ width of the input video.')
-def loadvid_test(filename, width, height):
+@click.option('--frame-nums',
+              'test_name',
+              flag_value='frame_nums',
+              default=True)
+@click.option('--loadvid',
+              'test_name',
+              flag_value='loadvid')
+@click.option('--should-seek/--no-should-seek',
+              default=False,
+              help='Whether to use the potentially frame-inaccurate seek.')
+@click.option('--start-frame',
+              default=None,
+              type=int,
+              help='Which frame to start decoding from.')
+def loadvid_test(filename, width, height, test_name, should_seek, start_frame):
     """Tests the lintel.loadvid Python extension.
 
     This program will run tests to sanity check -- visually, by using
@@ -116,5 +135,11 @@ def loadvid_test(filename, width, height):
     This program also acts as a sample use case for the APIs provided by
     Lintel.
     """
-    _loadvid_test_vanilla(filename, width, height)
-    _loadvid_test_frame_nums(filename, width, height)
+    if test_name == 'loadvid':
+        _loadvid_test_vanilla(filename, width, height)
+    elif test_name == 'frame_nums':
+        _loadvid_test_frame_nums(filename,
+                                 width,
+                                 height,
+                                 start_frame,
+                                 should_seek)
