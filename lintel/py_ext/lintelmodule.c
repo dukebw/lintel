@@ -167,26 +167,30 @@ static PyObject *
 loadvid_frame_nums(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
 {
         PyObject *result = NULL;
-        const char *video_bytes;
-        Py_ssize_t in_size_bytes;
+        const char *video_bytes = NULL;
+        Py_ssize_t in_size_bytes = 0;
         PyObject *frame_nums = NULL;
         uint32_t width = 256;
         uint32_t height = 256;
+        /* NOTE(brendan): should_seek must be int (not bool) because Python. */
+        int32_t should_seek = false;
         static char *kwlist[] = {"encoded_video",
                                  "frame_nums",
                                  "width",
                                  "height",
+                                 "should_seek",
                                  0};
 
         if (!PyArg_ParseTupleAndKeywords(args,
                                          kw,
-                                         "y#|$OII:loadvid_frame_nums",
+                                         "y#|$OIIp:loadvid_frame_nums",
                                          kwlist,
                                          &video_bytes,
                                          &in_size_bytes,
                                          &frame_nums,
                                          &width,
-                                         &height))
+                                         &height,
+                                         &should_seek))
                 return NULL;
 
         if (!PySequence_Check(frame_nums)) {
@@ -237,7 +241,8 @@ loadvid_frame_nums(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
         decode_video_from_frame_nums((uint8_t *)(frames->ob_bytes),
                                      &vid_ctx,
                                      num_frames,
-                                     frame_nums_buf);
+                                     frame_nums_buf,
+                                     should_seek);
 
         PyMem_RawFree(frame_nums_buf);
 
@@ -254,8 +259,8 @@ static PyObject *
 loadvid(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
 {
         PyObject *result = NULL;
-        const char *video_bytes;
-        Py_ssize_t in_size_bytes;
+        const char *video_bytes = NULL;
+        Py_ssize_t in_size_bytes = 0;
         bool should_random_seek = true;
         uint32_t width = 256;
         uint32_t height = 256;
@@ -356,7 +361,7 @@ static PyMethodDef lintel_methods[] = {
         {"loadvid_frame_nums",
          (PyCFunction)loadvid_frame_nums,
          METH_VARARGS | METH_KEYWORDS,
-         PyDoc_STR("loadvid_frame_nums(encoded_video, frame_nums, width, height) -> "
+         PyDoc_STR("loadvid_frame_nums(encoded_video, frame_nums, width, height, should_seek) -> "
                    "decoded video ByteArray object")},
         {NULL, NULL, 0, NULL}
 };

@@ -527,8 +527,12 @@ void
 decode_video_from_frame_nums(uint8_t *dest,
                              struct video_stream_context *vid_ctx,
                              int32_t num_requested_frames,
-                             const int32_t *frame_numbers)
+                             const int32_t *frame_numbers,
+                             bool should_seek)
 {
+        if (num_requested_frames <= 0)
+                return;
+
         AVCodecContext *codec_context = vid_ctx->codec_context;
         struct SwsContext *sws_context = sws_getContext(codec_context->width,
                                                         codec_context->height,
@@ -548,11 +552,71 @@ decode_video_from_frame_nums(uint8_t *dest,
         AVStream *video_stream =
                 vid_ctx->format_context->streams[vid_ctx->video_stream_index];
 
+        int32_t status;
         uint32_t copied_bytes = 0;
         const uint32_t bytes_per_row = 3*frame_rgb->width;
         const uint32_t bytes_per_frame = bytes_per_row*frame_rgb->height;
         int32_t current_frame_index = 0;
-        for (int32_t out_frame_index = 0;
+        int32_t out_frame_index = 0;
+        int64_t prev_pts = 0;
+        if (should_seek) {
+                /**
+                 * NOTE(brendan): Convert from frame number to video stream
+                 * time base by multiplying by the _average_ time (in
+                 * video_stream->time_base units) per frame.
+                 */
+                int32_t avg_frame_duration = (video_stream->duration /
+                                              video_stream->nb_frames);
+                int64_t timestamp = frame_numbers[0]*avg_frame_duration;
+                status = av_seek_frame(vid_ctx->format_context,
+                                       vid_ctx->video_stream_index,
+                                       timestamp,
+                                       AVSEEK_FLAG_BACKWARD);
+                assert(status >= 0);
+
+                /**
+                 * NOTE(brendan): Here we are handling seeking, where we need
+                 * to decode the first frame in order to get the current PTS in
+                 * the video stream.
+                 *
+                 * Most likely, the seek brought the video stream to a keyframe
+                 * before the first desired frame, in which case we need to:
+                 *
+                 * 1. Determine which frame the video stream is at, by decoding
+                 * the first frame and using its PTS and using the average
+                 * frame duration approximation again.
+                 *
+                 * 2. Possibly copy this decoded frame into the output buffer,
+                 * if by chance the frame seeked to is the first desired frame.
+                 */
+                status = receive_frame(vid_ctx);
+                if (status == VID_DECODE_EOF)
+                        goto out_free_frame_rgb_and_sws;
+                assert(status == VID_DECODE_SUCCESS);
+
+                current_frame_index = vid_ctx->frame->pts/avg_frame_duration;
+                assert(current_frame_index <= frame_numbers[0]);
+
+                /**
+                 * NOTE(brendan): Handle the chance that the seek brought the
+                 * stream exactly to the first desired frame index.
+                 */
+                if (current_frame_index == frame_numbers[0]) {
+                        copied_bytes = copy_next_frame(dest,
+                                                       vid_ctx->frame,
+                                                       frame_rgb,
+                                                       codec_context,
+                                                       sws_context,
+                                                       copied_bytes,
+                                                       bytes_per_row);
+                        ++out_frame_index;
+                }
+                ++current_frame_index;
+
+                prev_pts = vid_ctx->frame->pts;
+        }
+
+        for (;
              out_frame_index < num_requested_frames;
              ++out_frame_index) {
                 int32_t desired_frame_num =
@@ -562,7 +626,7 @@ decode_video_from_frame_nums(uint8_t *dest,
                        (desired_frame_num >= 0));
 
                 while (current_frame_index <= desired_frame_num) {
-                        int32_t status = receive_frame(vid_ctx);
+                        status = receive_frame(vid_ctx);
                         if (status == VID_DECODE_EOF) {
                                 loop_to_buffer_end(dest,
                                                    copied_bytes,
@@ -573,7 +637,16 @@ decode_video_from_frame_nums(uint8_t *dest,
                         }
                         assert(status == VID_DECODE_SUCCESS);
 
-                        ++current_frame_index;
+                        /**
+                         * NOTE(brendan): Only advance the frame index if the
+                         * current frame's PTS is greater than the previous
+                         * frame's PTS. This is to workaround an FFmpeg oddity
+                         * where the first frame decoded gets duplicated.
+                         */
+                        if (vid_ctx->frame->pts > prev_pts) {
+                                ++current_frame_index;
+                                prev_pts = vid_ctx->frame->pts;
+                        }
                 }
 
                 copied_bytes = copy_next_frame(dest,
