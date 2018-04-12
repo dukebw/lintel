@@ -187,7 +187,7 @@ git clone https://github.com/FFmpeg/FFmpeg.git && cd FFmpeg
 
 ./configure --enable-shared --enable-gpl --enable-libx264 --enable-pic --enable-runtime-cpudetect --cc="gcc -fPIC" --prefix=$HOME/.local
 
-- make -j$(nproc) && make install
+make -j$(nproc) && make install
 ```
 
 
