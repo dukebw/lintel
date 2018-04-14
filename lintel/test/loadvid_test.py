@@ -38,11 +38,19 @@ def _loadvid_test_vanilla(filename, width, height):
     num_frames = 32
     for _ in range(10):
         start = time.perf_counter()
-        decoded_frames, _ = lintel.loadvid(encoded_video,
-                                           should_random_seek=True,
-                                           width=width,
-                                           height=height,
-                                           num_frames=num_frames)
+        result = lintel.loadvid(encoded_video,
+                                should_random_seek=True,
+                                width=width,
+                                height=height,
+                                num_frames=num_frames)
+
+        # NOTE(brendan): dynamic size returns (frames, width, height,
+        # seek_distance).
+        if (width == 0) and (height == 0):
+            decoded_frames, width, height, _ = result
+        else:
+            decoded_frames, _ = result
+
         decoded_frames = np.frombuffer(decoded_frames, dtype=np.uint8)
         decoded_frames = np.reshape(decoded_frames,
                                     newshape=(num_frames, height, width, 3))
@@ -83,11 +91,17 @@ def _loadvid_test_frame_nums(filename,
             i += int(random.uniform(1, 4))
             frame_nums.append(i)
 
-        decoded_frames = lintel.loadvid_frame_nums(encoded_video,
-                                                   frame_nums=frame_nums,
-                                                   width=width,
-                                                   height=height,
-                                                   should_seek=should_seek)
+        result = lintel.loadvid_frame_nums(encoded_video,
+                                           frame_nums=frame_nums,
+                                           width=width,
+                                           height=height,
+                                           should_seek=should_seek)
+
+        if (width == 0) and (height == 0):
+            decoded_frames, width, height = result
+        else:
+            decoded_frames = result
+
         decoded_frames = np.frombuffer(decoded_frames, dtype=np.uint8)
         decoded_frames = np.reshape(decoded_frames,
                                     newshape=(num_frames, height, width, 3))
@@ -100,6 +114,9 @@ def _loadvid_test_frame_nums(filename,
 
 
 @click.command()
+@click.option('--dynamic-size/--no-dynamic-size',
+              default=False,
+              help='Whether lintel should dynamically find video size.')
 @click.option('--filename',
               default=None,
               type=str,
@@ -126,7 +143,13 @@ def _loadvid_test_frame_nums(filename,
               default=0,
               type=int,
               help='Which frame to start decoding from.')
-def loadvid_test(filename, width, height, test_name, should_seek, start_frame):
+def loadvid_test(dynamic_size,
+                 filename,
+                 width,
+                 height,
+                 test_name,
+                 should_seek,
+                 start_frame):
     """Tests the lintel.loadvid Python extension.
 
     This program will run tests to sanity check -- visually, by using
@@ -135,6 +158,10 @@ def loadvid_test(filename, width, height, test_name, should_seek, start_frame):
     This program also acts as a sample use case for the APIs provided by
     Lintel.
     """
+    if dynamic_size:
+        width = 0
+        height = 0
+
     if test_name == 'loadvid':
         _loadvid_test_vanilla(filename, width, height)
     elif test_name == 'frame_nums':

@@ -63,6 +63,14 @@ Run the following to install a locally editable version of the library, with pip
    Pass criteria: decoded frames from the video should show up without
    distortion, decoding each clip in < 500ms.
 
+2. Run:
+
+   `lintel_test --filename <video-filename> --width <width> --height <height> --frame-nums --should-seek`
+
+   to test the frame number API.
+
+Passing `--width 0 --height 0` will test the dynamic resizing.
+
 
 # Usage in a data processing pipeline
 
@@ -147,6 +155,22 @@ def _load_frame_nums_to_4darray(video, dataset, frame_nums):
     return decoded_frames
 ```
 
+Both APIs can be used without passing a width and height, in which case the
+width and height of the video will be determined by `libavcodec` and returned
+in the result tuple.
+
+```python
+decoded_frames, width, height = lintel.loadvid_frame_nums(
+    video, frame_nums=frame_nums)
+
+video, width, height, seek_distance = lintel.loadvid(
+    video,
+    should_random_seek=should_random_seek,
+    num_frames=dataset.num_frames,
+    fps_cap=fps_cap)
+```
+
+
 # Installing FFmpeg from Source
 
 It may be necessary to compile FFmpeg from source, e.g. if there is no way to
@@ -189,6 +213,36 @@ git clone https://github.com/FFmpeg/FFmpeg.git && cd FFmpeg
 
 make -j$(nproc) && make install
 ```
+
+
+## Installation Debugging
+
+The following error:
+
+`ImportError: <lintel-path>/_lintel.cpython-36m-x86_64-linux-gnu.so: undefined symbol: avcodec_receive_frame`
+
+can be debugged as follows.
+
+One way to see what shared objects a binary is linking to is using ldd:
+`LD_DEBUG=libs ldd <binary-name>`.
+
+E.g.,
+
+`LD_DEBUG=libs ldd <lintel-path>/_lintel.cpython-36m-x86_64-linux-gnu.so`
+
+It should spit out a bunch of information, including a line like this:
+libavcodec.so.57 => /export/mlrg/bduke/.local/lib/libavcodec.so.57
+(0x00007ff4b997a000). This libavcodec.so.57 => line should point to the new
+libavcodec.so that you compiled and installed.
+
+It is possible that this issue may occur if `LIBRARY_PATH` (different from
+`LD_LIBRARY_PATH`) is not set during compile time of lintel. `LIBRARY_PATH`
+should also point to wherever libavcodec.so lives, the same place as
+`LD_LIBRARY_PATH`, but `LIBRARY_PATH` is used at compile time instead of
+runtime (i.e., be sure that `LIBRARY_PATH` includes a directory with your new
+libavcodec.so in it when you run `pip install` on lintel). I suspect that the
+libavcodec.so.57 symbol name is baked into the lintel CPython shared object at
+compile time.
 
 
 # Citing
