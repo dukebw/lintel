@@ -52,12 +52,16 @@ struct buffer_data {
  * @format_context: Format context to read from.
  * @codec_context: Context of decoder used to decode video stream packets.
  * @video_stream_index: Index of video stream that frames will be read from.
+ * @duration: Duration of the video in the timebase of the video stream.
+ * @nb_frames: (Possibly approximate) number of frames in the video.
  */
 struct video_stream_context {
         AVFrame *frame;
         AVCodecContext *codec_context;
         AVFormatContext *format_context;
         int32_t video_stream_index;
+        int64_t duration;
+        int64_t nb_frames;
 };
 
 /**
@@ -134,8 +138,7 @@ AVCodecContext *open_video_codec_ctx(AVStream *video_stream);
  * @param seek_distance_out Output seek_distance variable. Only set if random
  * seeking occurred, therefore this output parameter should be initialized to
  * 0.0f by the caller.
- * @param format_context The format context with the video stream in it.
- * @param video_stream_index Index of the video stream to seek.
+ * @param vid_ctx Context with video stream to seek in.
  * @param should_random_seek Should a random seek in the video be performed?
  * @param num_requested_frames Number of requested frames to be extracted
  * starting from the seek point.
@@ -145,8 +148,7 @@ AVCodecContext *open_video_codec_ctx(AVStream *video_stream);
  */
 int64_t
 seek_to_closest_keypoint(float *seek_distance_out,
-                         AVFormatContext *format_context,
-                         int32_t video_stream_index,
+                         struct video_stream_context *vid_ctx,
                          bool should_random_seek,
                          uint32_t num_requested_frames,
                          uint32_t fps_cap);

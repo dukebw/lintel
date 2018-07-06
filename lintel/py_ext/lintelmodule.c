@@ -131,7 +131,63 @@ setup_vid_stream_context(struct video_stream_context *vid_ctx,
         if (vid_ctx->codec_context == NULL)
                 goto clean_up_format_context;
 
-        assert((video_stream->duration > 0) && (video_stream->nb_frames > 0));
+        if ((video_stream->duration <= 0) || (video_stream->nb_frames <= 0)) {
+                /**
+                 * Some video containers (e.g., webm) contain indices of only
+                 * frames-of-interest, e.g., keyframes, and therefore the whole
+                 * file must be parsed to get the number of frames (nb_frames
+                 * will be zero).
+                 *
+                 * Also, for webm only the duration of the entire file is
+                 * specified in the header (as opposed to the stream duration),
+                 * so the duration must be taken from the AVFormatContext, not
+                 * the AVStream.
+                 *
+                 * See this SO answer: https://stackoverflow.com/a/32538549
+                 */
+
+                /**
+                 * Compute nb_frames from fmt ctx duration (microseconds) and
+                 * stream FPS (frames/second).
+                 */
+                assert(video_stream->avg_frame_rate.den > 0);
+
+                enum AVRounding rnd = (enum AVRounding)(AV_ROUND_DOWN |
+                                                        AV_ROUND_PASS_MINMAX);
+                int64_t fps_num = video_stream->avg_frame_rate.num;
+                int64_t fps_den =
+                        video_stream->avg_frame_rate.den*(int64_t)AV_TIME_BASE;
+                vid_ctx->nb_frames =
+                        av_rescale_rnd(vid_ctx->format_context->duration,
+                                       fps_num,
+                                       fps_den,
+                                       rnd);
+
+                /**
+                 * NOTE(brendan): fmt ctx duration in microseconds =>
+                 *
+                 * fmt ctx duration == (stream duration)*(stream timebase)*1e6
+                 *
+                 * since stream timebase is in units of
+                 * seconds / (stream timestamp). The rest of the code expects
+                 * the duration in stream timestamps, so do the conversion
+                 * here.
+                 *
+                 * Multiply the timebase numerator by AV_TIME_BASE to get a
+                 * more accurate rounded duration by doing the rounding in the
+                 * higher precision units.
+                 */
+                int64_t tb_num = video_stream->time_base.num*(int64_t)AV_TIME_BASE;
+                int64_t tb_den = video_stream->time_base.den;
+                vid_ctx->duration =
+                        av_rescale_rnd(vid_ctx->format_context->duration,
+                                       tb_den,
+                                       tb_num,
+                                       rnd);
+        } else {
+                vid_ctx->duration = video_stream->duration;
+                vid_ctx->nb_frames = video_stream->nb_frames;
+        }
 
         vid_ctx->frame = av_frame_alloc();
         if (vid_ctx->frame == NULL)
@@ -363,8 +419,7 @@ loadvid(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
 
         int64_t timestamp =
                 seek_to_closest_keypoint(&seek_distance,
-                                         vid_ctx.format_context,
-                                         vid_ctx.video_stream_index,
+                                         &vid_ctx,
                                          should_random_seek,
                                          num_frames,
                                          fps_cap);
