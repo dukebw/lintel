@@ -58,6 +58,8 @@ receive_frame(struct video_stream_context *vid_ctx)
                                        vid_ctx->frame);
         if (status == 0)
                 return VID_DECODE_SUCCESS;
+        else if (status != AVERROR(EAGAIN))
+                return VID_DECODE_FFMPEG_ERR;
 
         was_frame_received = false;
         while (!was_frame_received &&
@@ -619,15 +621,19 @@ decode_video_from_frame_nums(uint8_t *dest,
         for (;
              out_frame_index < num_requested_frames;
              ++out_frame_index) {
-                int32_t desired_frame_num =
-                        frame_numbers[out_frame_index];
-                /**
-                 * TODO(brendan): return an error here; should not assert due
-                 * to user input.
-                 */
-                assert((desired_frame_num < vid_ctx->nb_frames) &&
-                       (desired_frame_num >= current_frame_index) &&
+                int32_t desired_frame_num = frame_numbers[out_frame_index];
+                assert((desired_frame_num >= current_frame_index) &&
                        (desired_frame_num >= 0));
+
+                /* Loop frames instead of aborting if we asked for too many. */
+                if (desired_frame_num > vid_ctx->nb_frames) {
+                        loop_to_buffer_end(dest,
+                                           copied_bytes,
+                                           out_frame_index,
+                                           bytes_per_frame,
+                                           num_requested_frames);
+                        goto out_free_frame_rgb_and_sws;
+                }
 
                 while (current_frame_index <= desired_frame_num) {
                         status = receive_frame(vid_ctx);
