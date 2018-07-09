@@ -54,27 +54,32 @@ receive_frame(struct video_stream_context *vid_ctx)
         int32_t status;
         bool was_frame_received;
 
+        status = avcodec_receive_frame(vid_ctx->codec_context,
+                                       vid_ctx->frame);
+        if (status == 0)
+                return VID_DECODE_SUCCESS;
+        else if (status != AVERROR(EAGAIN))
+                return VID_DECODE_FFMPEG_ERR;
+
         was_frame_received = false;
         while (!was_frame_received &&
                (av_read_frame(vid_ctx->format_context, &packet) == 0)) {
                 if (packet.stream_index == vid_ctx->video_stream_index) {
-                        do {
-                                status = avcodec_send_packet(vid_ctx->codec_context,
-                                                             &packet);
-                                if (status != 0) {
-                                        av_packet_unref(&packet);
-                                        return VID_DECODE_FFMPEG_ERR;
-                                }
+                        status = avcodec_send_packet(vid_ctx->codec_context,
+                                                     &packet);
+                        if (status != 0) {
+                                av_packet_unref(&packet);
+                                return VID_DECODE_FFMPEG_ERR;
+                        }
 
-                                status = avcodec_receive_frame(vid_ctx->codec_context,
-                                                               vid_ctx->frame);
-                                if (status == 0) {
-                                        was_frame_received = true;
-                                } else if (status != AVERROR(EAGAIN)) {
-                                        av_packet_unref(&packet);
-                                        return VID_DECODE_FFMPEG_ERR;
-                                }
-                        } while (status == AVERROR(EAGAIN));
+                        status = avcodec_receive_frame(vid_ctx->codec_context,
+                                                       vid_ctx->frame);
+                        if (status == 0) {
+                                was_frame_received = true;
+                        } else if (status != AVERROR(EAGAIN)) {
+                                av_packet_unref(&packet);
+                                return VID_DECODE_FFMPEG_ERR;
+                        }
                 }
 
                 av_packet_unref(&packet);
@@ -460,8 +465,7 @@ AVCodecContext *open_video_codec_ctx(AVStream *video_stream)
 
 int64_t
 seek_to_closest_keypoint(float *seek_distance_out,
-                         AVFormatContext *format_context,
-                         int32_t video_stream_index,
+                         struct video_stream_context *vid_ctx,
                          bool should_random_seek,
                          uint32_t num_requested_frames,
                          uint32_t fps_cap)
@@ -469,7 +473,8 @@ seek_to_closest_keypoint(float *seek_distance_out,
         if (!should_random_seek)
                 return 0;
 
-        AVStream *video_stream = format_context->streams[video_stream_index];
+        AVStream *video_stream =
+                vid_ctx->format_context->streams[vid_ctx->video_stream_index];
         assert(video_stream->start_time == 0);
 
         int64_t tb_num = video_stream->time_base.num*(int64_t)AV_TIME_BASE;
@@ -477,10 +482,10 @@ seek_to_closest_keypoint(float *seek_distance_out,
         enum AVRounding rnd = (enum AVRounding)(AV_ROUND_DOWN |
                                                 AV_ROUND_PASS_MINMAX);
 
-        int64_t duration = av_rescale_rnd(video_stream->duration, tb_num, tb_den, rnd);
+        int64_t duration = av_rescale_rnd(vid_ctx->duration, tb_num, tb_den, rnd);
         double duration_seconds = ((double)duration)/AV_TIME_BASE;
 
-        double frame_rate = get_frame_rate(format_context, video_stream);
+        double frame_rate = get_frame_rate(vid_ctx->format_context, video_stream);
         if (frame_rate <= 0.0)
                 return 0;
 
@@ -499,8 +504,8 @@ seek_to_closest_keypoint(float *seek_distance_out,
         int64_t timestamp = (int64_t)(seek_distance*AV_TIME_BASE + 0.5);
         timestamp = av_rescale_rnd(timestamp, tb_den, tb_num, rnd);
 
-        int32_t status = av_seek_frame(format_context,
-                                       video_stream_index,
+        int32_t status = av_seek_frame(vid_ctx->format_context,
+                                       vid_ctx->video_stream_index,
                                        timestamp,
                                        AVSEEK_FLAG_BACKWARD);
         assert(status >= 0);
@@ -549,9 +554,6 @@ decode_video_from_frame_nums(uint8_t *dest,
         AVFrame *frame_rgb = allocate_rgb_image(codec_context);
         assert(frame_rgb != NULL);
 
-        AVStream *video_stream =
-                vid_ctx->format_context->streams[vid_ctx->video_stream_index];
-
         int32_t status;
         uint32_t copied_bytes = 0;
         const uint32_t bytes_per_row = 3*frame_rgb->width;
@@ -565,8 +567,8 @@ decode_video_from_frame_nums(uint8_t *dest,
                  * time base by multiplying by the _average_ time (in
                  * video_stream->time_base units) per frame.
                  */
-                int32_t avg_frame_duration = (video_stream->duration /
-                                              video_stream->nb_frames);
+                int32_t avg_frame_duration = (vid_ctx->duration /
+                                              vid_ctx->nb_frames);
                 int64_t timestamp = frame_numbers[0]*avg_frame_duration;
                 status = av_seek_frame(vid_ctx->format_context,
                                        vid_ctx->video_stream_index,
@@ -619,11 +621,19 @@ decode_video_from_frame_nums(uint8_t *dest,
         for (;
              out_frame_index < num_requested_frames;
              ++out_frame_index) {
-                int32_t desired_frame_num =
-                        frame_numbers[out_frame_index];
-                assert((desired_frame_num < video_stream->nb_frames) &&
-                       (desired_frame_num >= current_frame_index) &&
+                int32_t desired_frame_num = frame_numbers[out_frame_index];
+                assert((desired_frame_num >= current_frame_index) &&
                        (desired_frame_num >= 0));
+
+                /* Loop frames instead of aborting if we asked for too many. */
+                if (desired_frame_num > vid_ctx->nb_frames) {
+                        loop_to_buffer_end(dest,
+                                           copied_bytes,
+                                           out_frame_index,
+                                           bytes_per_frame,
+                                           num_requested_frames);
+                        goto out_free_frame_rgb_and_sws;
+                }
 
                 while (current_frame_index <= desired_frame_num) {
                         status = receive_frame(vid_ctx);
