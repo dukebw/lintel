@@ -370,26 +370,23 @@ loadvid(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
         uint32_t height = 0;
         uint32_t num_frames = 32;
         float seek_distance = 0.0f;
-        float fps_cap = 25.0f;
         static char *kwlist[] = {"encoded_video",
                                  "should_random_seek",
                                  "width",
                                  "height",
                                  "num_frames",
-                                 "fps_cap",
                                  0};
 
         if (!PyArg_ParseTupleAndKeywords(args,
                                          kw,
-                                         "y#|$pIIIf:loadvid",
+                                         "y#|$pIII:loadvid",
                                          kwlist,
                                          &video_bytes,
                                          &in_size_bytes,
                                          &should_random_seek,
                                          &width,
                                          &height,
-                                         &num_frames,
-                                         &fps_cap))
+                                         &num_frames))
                 return NULL;
 
         struct video_stream_context vid_ctx;
@@ -417,12 +414,10 @@ loadvid(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
                 return NULL;
         }
 
-        int64_t timestamp =
-                seek_to_closest_keypoint(&seek_distance,
-                                         &vid_ctx,
-                                         should_random_seek,
-                                         num_frames,
-                                         fps_cap);
+        int64_t timestamp = seek_to_closest_keypoint(&seek_distance,
+                                                     &vid_ctx,
+                                                     should_random_seek,
+                                                     num_frames);
 
         /*
          * NOTE(brendan): after this point, the only possible errors are due to
@@ -442,8 +437,7 @@ loadvid(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
 
         decode_video_to_out_buffer((uint8_t *)(frames->ob_bytes),
                                    &vid_ctx,
-                                   num_frames,
-                                   fps_cap);
+                                   num_frames);
 
 clean_up_av_frame:
         clean_up_vid_ctx(&vid_ctx);
@@ -471,7 +465,7 @@ static PyMethodDef lintel_methods[] = {
         {"loadvid",
          (PyCFunction)loadvid,
          METH_VARARGS | METH_KEYWORDS,
-         PyDoc_STR("loadvid(encoded_video, should_random_seek, width, height, num_frames, fps_cap) -> "
+         PyDoc_STR("loadvid(encoded_video, should_random_seek, width, height, num_frames) -> "
                    "tuple(decoded video ByteArray object, seek_distance) or\n"
                    "tuple(decoded video ByteArray object, width, height, seek_distance)\n"
                    "if width and height are not passed as arguments.")},
