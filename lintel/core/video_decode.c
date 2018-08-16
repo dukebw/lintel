@@ -78,16 +78,16 @@ receive_frame(struct video_stream_context *vid_ctx)
         if (was_frame_received)
                 return VID_DECODE_SUCCESS;
 
-        av_init_packet(&packet);
-        packet.data = NULL;
-        packet.size = 0;
-
         /**
          * NOTE(brendan): Flush/drain the codec. After this, subsequent calls
          * to receive_frame will return frames until EOF.
          *
          * See FFmpeg's libavcodec/avcodec.h.
          */
+        av_init_packet(&packet);
+        packet.data = NULL;
+        packet.size = 0;
+
         status = avcodec_send_packet(vid_ctx->codec_context,
                                      &packet);
         if (status == 0) {
