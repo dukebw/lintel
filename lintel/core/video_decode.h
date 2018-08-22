@@ -150,8 +150,7 @@ int64_t
 seek_to_closest_keypoint(float *seek_distance_out,
                          struct video_stream_context *vid_ctx,
                          bool should_random_seek,
-                         uint32_t num_requested_frames,
-                         uint32_t fps_cap);
+                         uint32_t num_requested_frames);
 
 /**
  * Skips frames until a frame that is past `timestamp` has been reached.
@@ -172,22 +171,16 @@ skip_past_timestamp(struct video_stream_context *vid_ctx, int64_t timestamp);
  * unless no frames were received (in which case the output buffer is garbage
  * data).
  *
- * The framerate is capped to a hardcoded value of `FPS_CAP`. Framerates lower
- * than `FPS_CAP` are allowed.
- *
  * TODO(brendan): Support fixing the framerate?
  *
  * @param dest Output RGB24 frame buffer.
  * @param vid_ctx Context needed to decode frames from the video stream.
  * @param num_requested_frames Number of frames requested to fill into `dest`.
- * @param fps_cap Maximum framerate to capture. Higher framerates will be
- * dropped.
  */
 void
 decode_video_to_out_buffer(uint8_t *dest,
                            struct video_stream_context *vid_ctx,
-                           int32_t num_requested_frames,
-                           uint32_t fps_cap);
+                           int32_t num_requested_frames);
 
 /**
  * decode_video_from_frame_nums() - Decodes video from exactly the frames

@@ -25,20 +25,6 @@
 #include <string.h>
 
 /**
- * Gets the frame rate for a passed video stream.
- *
- * @param format_context Format context to read from.
- * @param video_stream Video stream to open codec context for.
- *
- * @return Frame rate of video stream, in seconds.
- */
-static double
-get_frame_rate(AVFormatContext *format_context, AVStream *video_stream)
-{
-        return av_q2d(av_guess_frame_rate(format_context, video_stream, NULL));
-}
-
-/**
  * Receives a complete frame from the video stream in format_context that
  * corresponds to video_stream_index.
  *
@@ -54,10 +40,14 @@ receive_frame(struct video_stream_context *vid_ctx)
         int32_t status;
         bool was_frame_received;
 
+        av_init_packet(&packet);
+
         status = avcodec_receive_frame(vid_ctx->codec_context,
                                        vid_ctx->frame);
         if (status == 0)
                 return VID_DECODE_SUCCESS;
+        else if (status == AVERROR_EOF)
+                return VID_DECODE_EOF;
         else if (status != AVERROR(EAGAIN))
                 return VID_DECODE_FFMPEG_ERR;
 
@@ -87,6 +77,30 @@ receive_frame(struct video_stream_context *vid_ctx)
 
         if (was_frame_received)
                 return VID_DECODE_SUCCESS;
+
+        /**
+         * NOTE(brendan): Flush/drain the codec. After this, subsequent calls
+         * to receive_frame will return frames until EOF.
+         *
+         * See FFmpeg's libavcodec/avcodec.h.
+         */
+        av_init_packet(&packet);
+        packet.data = NULL;
+        packet.size = 0;
+
+        status = avcodec_send_packet(vid_ctx->codec_context,
+                                     &packet);
+        if (status == 0) {
+                status = avcodec_receive_frame(vid_ctx->codec_context,
+                                               vid_ctx->frame);
+                if (status == 0) {
+                        av_packet_unref(&packet);
+
+                        return VID_DECODE_SUCCESS;
+                }
+        }
+
+        av_packet_unref(&packet);
 
         return VID_DECODE_EOF;
 }
@@ -210,12 +224,8 @@ loop_to_buffer_end(uint8_t *dest,
 void
 decode_video_to_out_buffer(uint8_t *dest,
                            struct video_stream_context *vid_ctx,
-                           int32_t num_requested_frames,
-                           uint32_t fps_cap)
+                           int32_t num_requested_frames)
 {
-        AVStream *video_stream =
-                vid_ctx->format_context->streams[vid_ctx->video_stream_index];
-
         AVCodecContext *codec_context = vid_ctx->codec_context;
         struct SwsContext *sws_context = sws_getContext(codec_context->width,
                                                         codec_context->height,
@@ -232,16 +242,9 @@ decode_video_to_out_buffer(uint8_t *dest,
         AVFrame *frame_rgb = allocate_rgb_image(codec_context);
         assert(frame_rgb != NULL);
 
-        double fps_ratio = get_frame_rate(vid_ctx->format_context,
-                                          video_stream);
-
-        fps_ratio = fps_ratio/fps_cap;
-
         const uint32_t bytes_per_row = 3*frame_rgb->width;
         const uint32_t bytes_per_frame = bytes_per_row*frame_rgb->height;
         uint32_t copied_bytes = 0;
-        float accumulated_extra_frames = 0.0f;
-        float per_frame_extra = (float)fps_ratio - 1.0f;
         for (int32_t frame_number = 0;
              frame_number < num_requested_frames;
              ++frame_number) {
@@ -256,33 +259,6 @@ decode_video_to_out_buffer(uint8_t *dest,
                 }
                 assert(status == VID_DECODE_SUCCESS);
 
-                /**
-                 * NOTE(brendan): if fps_ratio > 0.0, then for each frame we
-                 * received from the video stream, we have received
-                 * (stream_fps/desired_fps) too many frames.
-                 *
-                 * Therefore, the fractional component of
-                 * stream_fps/desired_fps is accumulated until it is greater
-                 * than 1.0, i.e. we have received at least one frame too many,
-                 * at which point frames are dropped until this extra frame
-                 * component (accumulated_extra_frames) is again below 1.0.
-                 */
-                accumulated_extra_frames += per_frame_extra;
-                while (accumulated_extra_frames >= 1.0f) {
-                        status = receive_frame(vid_ctx);
-                        if (status == VID_DECODE_EOF) {
-                                loop_to_buffer_end(dest,
-                                                   copied_bytes,
-                                                   frame_number,
-                                                   bytes_per_frame,
-                                                   num_requested_frames);
-                                goto out_free_frame_rgb_and_sws;
-                        }
-                        assert(status == VID_DECODE_SUCCESS);
-
-                        accumulated_extra_frames -= 1.0f;
-                }
-
                 copied_bytes = copy_next_frame(dest,
                                                vid_ctx->frame,
                                                frame_rgb,
@@ -292,7 +268,6 @@ decode_video_to_out_buffer(uint8_t *dest,
                                                bytes_per_row);
         }
 
-out_free_frame_rgb_and_sws:
         av_freep(frame_rgb->data);
         av_frame_free(&frame_rgb);
 
@@ -417,10 +392,11 @@ setup_format_context(AVFormatContext **format_context_ptr,
                                              NULL,
                                              NULL);
         if (status < 0) {
-                printf("AVERROR: %d, message: %s\n",
-                       status,
+                fprintf(stderr,
+                        "AVERROR: %d, message: %s\n",
+                        status,
 #ifdef __cplusplus
-                       "");
+                        "");
 #else
                        av_err2str(status));
 #endif // __cplusplus
@@ -467,42 +443,60 @@ int64_t
 seek_to_closest_keypoint(float *seek_distance_out,
                          struct video_stream_context *vid_ctx,
                          bool should_random_seek,
-                         uint32_t num_requested_frames,
-                         uint32_t fps_cap)
+                         uint32_t num_requested_frames)
 {
         if (!should_random_seek)
                 return 0;
 
+        int64_t start_time;
         AVStream *video_stream =
                 vid_ctx->format_context->streams[vid_ctx->video_stream_index];
-        assert(video_stream->start_time == 0);
+        /**
+         * TODO(brendan): Do something smarter to guess the start time, if the
+         * container doesn't have it?
+         */
+        if (video_stream->start_time != AV_NOPTS_VALUE)
+                start_time = video_stream->start_time;
+        else
+                start_time = 0;
 
-        int64_t tb_num = video_stream->time_base.num*(int64_t)AV_TIME_BASE;
+        int64_t valid_seek_frame_limit = (vid_ctx->nb_frames -
+                                          num_requested_frames);
+        if (valid_seek_frame_limit <= 0)
+                return AV_NOPTS_VALUE;
+
+        /**
+         * NOTE(brendan): skip_past_timestamp looks at the PTS of each frame
+         * until it crosses timestamp. Therefore if the video has N frames and
+         * we request one, timestamp should be in {0, 1, ..., N - 2}, because
+         * the PTS corresponding to timestamp will be dropped (i.e., frame
+         * N - 2 could be dropped, leaving N - 1).
+         */
+        int64_t timestamp = rand() % (valid_seek_frame_limit + 1);
+        if (timestamp == 0)
+                /* NOTE(brendan): Use AV_NOPTS_VALUE to represent no skip. */
+                return AV_NOPTS_VALUE;
+        else
+                timestamp -= 1;
+
+        timestamp = av_rescale_rnd(timestamp,
+                                   vid_ctx->duration,
+                                   vid_ctx->nb_frames,
+                                   AV_ROUND_DOWN);
+        timestamp += start_time;
+
+        /**
+         * NOTE(brendan): Convert seek distance from stream timebase units to
+         * seconds.
+         */
+        int64_t tb_num = video_stream->time_base.num;
         int64_t tb_den = video_stream->time_base.den;
-        enum AVRounding rnd = (enum AVRounding)(AV_ROUND_DOWN |
-                                                AV_ROUND_PASS_MINMAX);
-
-        int64_t duration = av_rescale_rnd(vid_ctx->duration, tb_num, tb_den, rnd);
-        double duration_seconds = ((double)duration)/AV_TIME_BASE;
-
-        double frame_rate = get_frame_rate(vid_ctx->format_context, video_stream);
-        if (frame_rate <= 0.0)
-                return 0;
-
-        if (frame_rate > fps_cap)
-                frame_rate = fps_cap;
-
-        double valid_seek_limit = (duration_seconds -
-                                   ((double)num_requested_frames)/frame_rate);
-        if (valid_seek_limit <= 0.0)
-                return 0;
-
-        float seek_distance = (float)(((double)rand()/RAND_MAX)*valid_seek_limit);
+        /**
+         * TODO(brendan): This seek distance is off by one frame...
+         */
+        float seek_distance = ((double)timestamp*tb_num)/tb_den;
         if (seek_distance_out != NULL)
                 *seek_distance_out = seek_distance;
-
-        int64_t timestamp = (int64_t)(seek_distance*AV_TIME_BASE + 0.5);
-        timestamp = av_rescale_rnd(timestamp, tb_den, tb_num, rnd);
 
         int32_t status = av_seek_frame(vid_ctx->format_context,
                                        vid_ctx->video_stream_index,
@@ -516,6 +510,9 @@ seek_to_closest_keypoint(float *seek_distance_out,
 int32_t
 skip_past_timestamp(struct video_stream_context *vid_ctx, int64_t timestamp)
 {
+        if (timestamp == AV_NOPTS_VALUE)
+                return VID_DECODE_SUCCESS;
+
         do {
                 int32_t status = receive_frame(vid_ctx);
                 if (status < 0) {

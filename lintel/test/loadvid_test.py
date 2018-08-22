@@ -26,7 +26,7 @@ import lintel
 
 
 def _loadvid_test_vanilla(filename, width, height):
-    """Tests the usual loadvid call, with a default FPS cap.
+    """Tests the usual loadvid call.
 
     The input file, an encoded video corresponding to `filename`, is repeatedly
     decoded (with a random seek). The first and last of the returned frames are
