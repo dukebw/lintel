@@ -19,7 +19,7 @@ import setuptools
 
 lintel_module = distutils.core.Extension(
     '_lintel',
-    define_macros=[('MAJOR_VERSION', '0'), ('MINOR_VERSION', '0')],
+    define_macros=[('MAJOR_VERSION', '1'), ('MINOR_VERSION', '0')],
     undef_macros=['NDEBUG'],
     include_dirs=['/usr/include/ffmpeg', 'lintel'],
     libraries=['avformat', 'avcodec', 'swscale', 'avutil', 'swresample'],
@@ -44,4 +44,4 @@ setuptools.setup(author='Brendan Duke',
                  packages=setuptools.find_packages(),
                  py_modules=['lintel.test.loadvid_test'],
                  url='https://brendanduke.ca',
-                 version='0.0')
+                 version='1.0')
