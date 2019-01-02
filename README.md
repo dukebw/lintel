@@ -1,5 +1,5 @@
 # lintel
-
+[![Anaconda badge](https://anaconda.org/conda-forge/lintel/badges/version.svg)](https://anaconda.org/conda-forge/lintel)
 
 Lintel is a Python module that can be used to decode videos, and return a byte
 array of all of the frames in the video, using the FFmpeg C interface directly.
