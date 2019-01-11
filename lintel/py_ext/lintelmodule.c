@@ -1,17 +1,20 @@
 /**
  * Copyright 2018 Brendan Duke.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * 
- *     http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *
+ * This file is part of Lintel.
+ *
+ * Lintel is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * Lintel is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+ * details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * Lintel. If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -205,14 +208,273 @@ clean_up_avio_ctx_buffer:
         return LOADVID_ERR;
 }
 
+
+static int32_t
+setup_vid_stream_context2(struct video_stream_context *vid_ctx,
+                         struct buffer_data *input_buf)
+{
+        const uint32_t buffer_size = 32*1024;
+        uint8_t *avio_ctx_buffer = av_malloc(buffer_size);
+        if (avio_ctx_buffer == NULL)
+                return LOADVID_ERR;
+
+        AVIOContext *avio_ctx = avio_alloc_context(avio_ctx_buffer,
+                                                   buffer_size,
+                                                   0,
+                                                   (void *)input_buf,
+                                                   &read_memory,
+                                                   NULL,
+                                                   &seek_memory);
+        if (avio_ctx == NULL)
+                goto clean_up_avio_ctx_buffer;
+
+        vid_ctx->format_context = avformat_alloc_context();
+        if (vid_ctx->format_context == NULL)
+                goto clean_up_avio_ctx;
+
+        vid_ctx->video_stream_index =
+                setup_format_context2(&vid_ctx->format_context,
+                                     avio_ctx,
+                                     input_buf,
+                                     buffer_size);
+
+
+        if (vid_ctx->video_stream_index < 0) {
+                fprintf(stderr, "Stream index not found.\n");
+
+                if (vid_ctx->video_stream_index == VID_DECODE_FFMPEG_ERR)
+                        /**
+                         * NOTE(brendan): Return a unique error code here so
+                         * that if there is no video stream a garbage buffer
+                         * can be returned.
+                         *
+                         * format_context, avio_ctx, and avio_ctx_buffer have
+                         * already been cleaned up (see setup_format_context
+                         * comment).
+                         */
+                        return LOADVID_ERR_STREAM_INDEX;
+
+                goto clean_up_format_context;
+        }
+
+        AVStream *video_stream =
+                vid_ctx->format_context->streams[vid_ctx->video_stream_index];
+        vid_ctx->codec_context = open_video_codec_ctx(video_stream);
+        if (vid_ctx->codec_context == NULL)
+                goto clean_up_format_context;
+
+        if ((video_stream->duration <= 0) || (video_stream->nb_frames <= 0)) {
+                /**
+                 * Some video containers (e.g., webm) contain indices of only
+                 * frames-of-interest, e.g., keyframes, and therefore the whole
+                 * file must be parsed to get the number of frames (nb_frames
+                 * will be zero).
+                 *
+                 * Also, for webm only the duration of the entire file is
+                 * specified in the header (as opposed to the stream duration),
+                 * so the duration must be taken from the AVFormatContext, not
+                 * the AVStream.
+                 *
+                 * See this SO answer: https://stackoverflow.com/a/32538549
+                 */
+
+                /**
+                 * Compute nb_frames from fmt ctx duration (microseconds) and
+                 * stream FPS (frames/second).
+                 */
+                assert(video_stream->avg_frame_rate.den > 0);
+
+                enum AVRounding rnd = (enum AVRounding)(AV_ROUND_DOWN |
+                                                        AV_ROUND_PASS_MINMAX);
+                int64_t fps_num = video_stream->avg_frame_rate.num;
+                int64_t fps_den =
+                        video_stream->avg_frame_rate.den*(int64_t)AV_TIME_BASE;
+                vid_ctx->nb_frames =
+                        av_rescale_rnd(vid_ctx->format_context->duration,
+                                       fps_num,
+                                       fps_den,
+                                       rnd);
+
+                /**
+                 * NOTE(brendan): fmt ctx duration in microseconds =>
+                 *
+                 * fmt ctx duration == (stream duration)*(stream timebase)*1e6
+                 *
+                 * since stream timebase is in units of
+                 * seconds / (stream timestamp). The rest of the code expects
+                 * the duration in stream timestamps, so do the conversion
+                 * here.
+                 *
+                 * Multiply the timebase numerator by AV_TIME_BASE to get a
+                 * more accurate rounded duration by doing the rounding in the
+                 * higher precision units.
+                 */
+                int64_t tb_num = video_stream->time_base.num*(int64_t)AV_TIME_BASE;
+                int64_t tb_den = video_stream->time_base.den;
+                vid_ctx->duration =
+                        av_rescale_rnd(vid_ctx->format_context->duration,
+                                       tb_den,
+                                       tb_num,
+                                       rnd);
+        } else {
+                vid_ctx->duration = video_stream->duration;
+                vid_ctx->nb_frames = video_stream->nb_frames;
+        }
+
+        vid_ctx->frame = av_frame_alloc();
+        if (vid_ctx->frame == NULL)
+                goto clean_up_avcodec;
+
+        return LOADVID_SUCCESS;
+
+clean_up_avcodec:
+        avcodec_close(vid_ctx->codec_context);
+        avcodec_free_context(&vid_ctx->codec_context);
+clean_up_format_context:
+        avformat_close_input(&vid_ctx->format_context);
+clean_up_avio_ctx:
+        av_freep(&avio_ctx);
+clean_up_avio_ctx_buffer:
+        av_freep(&avio_ctx_buffer);
+
+        return LOADVID_ERR;
+}
+
+static int32_t
+setup_vid_stream_context3(struct video_stream_context *vid_ctx,
+                         const char *filename)
+{
+        vid_ctx->format_context = avformat_alloc_context();
+        if (vid_ctx->format_context == NULL)
+                goto clean_up_format_context;
+
+        char buf[1024];
+        int32_t status = avformat_open_input(&vid_ctx->format_context, filename,
+                                              NULL, NULL);
+        if (status !=0 )
+        {
+                //fprintf(stderr, "Cannot open file. error code: %d\n", status);
+                av_strerror(status, buf, 1024);
+                printf("Cannot open the file, error code=%d, error message: %s\n", status, buf);
+                return LOADVID_ERR;
+        }
+
+
+        /*
+        * Retrieve stream information
+        */
+        if (avformat_find_stream_info(vid_ctx->format_context, NULL) < 0) {
+                fprintf(stderr, "Stream index not found.\n");
+                goto clean_up_format_context;
+        }
+
+        /*
+        * Detect streams types
+        */
+        uint32_t stream_index;
+        AVStream *video_stream;
+        for (stream_index = 0; stream_index < vid_ctx->format_context->nb_streams;
+             ++stream_index)
+        {
+                video_stream = vid_ctx->format_context->streams[stream_index];
+
+                if (video_stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                        break;
+        }
+        if (stream_index >= vid_ctx->format_context->nb_streams)
+                return VID_DECODE_FFMPEG_ERR;
+        vid_ctx->video_stream_index = stream_index;
+
+        video_stream = vid_ctx->format_context->streams[vid_ctx->video_stream_index];
+        vid_ctx->codec_context = open_video_codec_ctx(video_stream);
+        if (vid_ctx->codec_context == NULL)
+                goto clean_up_format_context;
+
+        if ((video_stream->duration <= 0) || (video_stream->nb_frames <= 0)) {
+                /**
+                 * Some video containers (e.g., webm) contain indices of only
+                 * frames-of-interest, e.g., keyframes, and therefore the whole
+                 * file must be parsed to get the number of frames (nb_frames
+                 * will be zero).
+                 *
+                 * Also, for webm only the duration of the entire file is
+                 * specified in the header (as opposed to the stream duration),
+                 * so the duration must be taken from the AVFormatContext, not
+                 * the AVStream.
+                 *
+                 * See this SO answer: https://stackoverflow.com/a/32538549
+                 */
+
+                /**
+                 * Compute nb_frames from fmt ctx duration (microseconds) and
+                 * stream FPS (frames/second).
+                 */
+                assert(video_stream->avg_frame_rate.den > 0);
+
+                enum AVRounding rnd = (enum AVRounding)(AV_ROUND_DOWN |
+                                                        AV_ROUND_PASS_MINMAX);
+                int64_t fps_num = video_stream->avg_frame_rate.num;
+                int64_t fps_den =
+                        video_stream->avg_frame_rate.den*(int64_t)AV_TIME_BASE;
+                vid_ctx->nb_frames =
+                        av_rescale_rnd(vid_ctx->format_context->duration,
+                                       fps_num,
+                                       fps_den,
+                                       rnd);
+
+                /**
+                 * NOTE(brendan): fmt ctx duration in microseconds =>
+                 *
+                 * fmt ctx duration == (stream duration)*(stream timebase)*1e6
+                 *
+                 * since stream timebase is in units of
+                 * seconds / (stream timestamp). The rest of the code expects
+                 * the duration in stream timestamps, so do the conversion
+                 * here.
+                 *
+                 * Multiply the timebase numerator by AV_TIME_BASE to get a
+                 * more accurate rounded duration by doing the rounding in the
+                 * higher precision units.
+                 */
+                int64_t tb_num = video_stream->time_base.num*(int64_t)AV_TIME_BASE;
+                int64_t tb_den = video_stream->time_base.den;
+                vid_ctx->duration =
+                        av_rescale_rnd(vid_ctx->format_context->duration,
+                                       tb_den,
+                                       tb_num,
+                                       rnd);
+        } else {
+                vid_ctx->duration = video_stream->duration;
+                vid_ctx->nb_frames = video_stream->nb_frames;
+        }
+
+        vid_ctx->frame = av_frame_alloc();
+        if (vid_ctx->frame == NULL)
+                goto clean_up_avcodec;
+
+        return LOADVID_SUCCESS;
+
+clean_up_avcodec:
+        avcodec_close(vid_ctx->codec_context);
+        avcodec_free_context(&vid_ctx->codec_context);
+clean_up_format_context:
+        avformat_close_input(&vid_ctx->format_context);
+
+        return LOADVID_ERR;
+}
+
+
+
+
 static void
 clean_up_vid_ctx(struct video_stream_context *vid_ctx)
 {
         av_frame_free(&vid_ctx->frame);
         avcodec_close(vid_ctx->codec_context);
         avcodec_free_context(&vid_ctx->codec_context);
-        av_freep(&vid_ctx->format_context->pb->buffer);
-        av_freep(&vid_ctx->format_context->pb);
+        // av_freep(&vid_ctx->format_context->pb->buffer);
+        // av_freep(&vid_ctx->format_context->pb);
+        // printf("close1\n");
         avformat_close_input(&vid_ctx->format_context);
 }
 
@@ -254,25 +516,31 @@ loadvid_frame_nums(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
         PyObject *frame_nums = NULL;
         uint32_t width = 0;
         uint32_t height = 0;
+
+        // resize
+        uint32_t resize = 0;
+        uint32_t rewidth = 0;
+        uint32_t reheight = 0;
+
         /* NOTE(brendan): should_seek must be int (not bool) because Python. */
         int32_t should_seek = false;
         static char *kwlist[] = {"encoded_video",
                                  "frame_nums",
                                  "width",
                                  "height",
-                                 "should_seek",
+                                 "resize",
                                  0};
 
         if (!PyArg_ParseTupleAndKeywords(args,
                                          kw,
-                                         "y#|$OIIp:loadvid_frame_nums",
+                                         "y#|$OIII:loadvid_frame_nums",
                                          kwlist,
                                          &video_bytes,
                                          &in_size_bytes,
                                          &frame_nums,
                                          &width,
                                          &height,
-                                         &should_seek))
+                                         &resize))
                 return NULL;
 
         if (!PySequence_Check(frame_nums)) {
@@ -299,8 +567,25 @@ loadvid_frame_nums(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
          * It is safer to pass the width and height as arguments, if there is a
          * possibility that videos in the dataset have no video stream.
          */
+
+        if (resize == 0) {
+                resize = width;
+        }
+        // resize
+        if ((width <= height && width == resize) || (height <= width && height <= resize)) {
+                rewidth = width;
+                reheight = height;
+        }
+        if (width < height) {
+                rewidth = resize;
+                reheight = (uint32_t)(resize * height / width);
+        } else {
+                reheight = resize;
+                rewidth = (uint32_t)(resize * width / height);
+        }
+
         const Py_ssize_t num_frames = PySequence_Size(frame_nums);
-        PyByteArrayObject *frames = alloc_pyarray(num_frames*width*height*3);
+        PyByteArrayObject *frames = alloc_pyarray(num_frames*rewidth*reheight*3);
         if (PyErr_Occurred() || (frames == NULL))
                 return (PyObject *)frames;
 
@@ -335,6 +620,8 @@ loadvid_frame_nums(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
                                      &vid_ctx,
                                      num_frames,
                                      frame_nums_buf,
+                                     &rewidth,
+                                     &reheight,
                                      should_seek);
 
         PyMem_RawFree(frame_nums_buf);
@@ -350,11 +637,179 @@ clean_up:
         if (!is_size_dynamic)
                 return (PyObject *)frames;
 
-        result = Py_BuildValue("Oii", frames, width, height);
+        result = Py_BuildValue("Oii", frames, rewidth, reheight);
         Py_DECREF(frames);
 
         return result;
 }
+
+
+
+
+
+static PyObject *
+loadvid_frame_index(PyObject *self, PyObject *args, PyObject *kw)
+{
+        PyObject *result = NULL;
+
+        const char *filename = NULL;
+
+        PyObject *frame_nums = NULL;
+        uint32_t width = 0;
+        uint32_t height = 0;
+
+        // resize
+        uint32_t resize = 0;
+        uint32_t rewidth = 0;
+        uint32_t reheight = 0;
+
+        /* NOTE(brendan): should_seek must be int (not bool) because Python. */
+        int32_t should_seek = false;
+        static char *kwlist[] = {"filename",
+                                 "frame_nums",
+                                 "width",
+                                 "height",
+                                 "resize",
+                                 0};
+
+        if (!PyArg_ParseTupleAndKeywords(args,
+                                         kw,
+                                         "s|OIII:loadvid_frame_index",
+                                         kwlist,
+                                         &filename,
+                                         &frame_nums,
+                                         &width,
+                                         &height,
+                                         &resize))
+                return NULL;
+
+        if (!PySequence_Check(frame_nums)) {
+                PyErr_SetString(PyExc_TypeError,
+                                "frame_nums needs to be a sequence");
+                return NULL;
+        }
+
+        struct video_stream_context vid_ctx;
+
+        int32_t status = setup_vid_stream_context3(&vid_ctx, filename);
+
+        bool is_size_dynamic = get_vid_width_height(&width,
+                                                    &height,
+                                                    vid_ctx.codec_context);
+
+        /**
+         * TODO(brendan): There is a hole in the logic here, where a bad status
+         * could be returned from `setup_vid_stream_context`, but the width and
+         * height from `codec_context` is still used to allocate `frames`.
+         *
+         * It is safer to pass the width and height as arguments, if there is a
+         * possibility that videos in the dataset have no video stream.
+         */
+
+        if (resize == 0) {
+                resize = width;
+        }
+        // resize
+        if ((width <= height && width == resize) || (height <= width && height <= resize)) {
+                rewidth = width;
+                reheight = height;
+        }
+        if (width < height) {
+                rewidth = resize;
+                reheight = (uint32_t)(resize * height / width);
+        } else {
+                reheight = resize;
+                rewidth = (uint32_t)(resize * width / height);
+        }
+
+        const Py_ssize_t num_frames = PySequence_Size(frame_nums);
+        PyByteArrayObject *frames = alloc_pyarray(num_frames*rewidth*reheight*3);
+        if (PyErr_Occurred() || (frames == NULL))
+                return (PyObject *)frames;
+
+
+        if (status != LOADVID_SUCCESS) {
+                if (status == LOADVID_ERR_STREAM_INDEX)
+                        return (PyObject *)frames;
+
+                return NULL;
+        }
+
+        int32_t *frame_nums_buf = PyMem_RawMalloc(num_frames*sizeof(int32_t));
+        if (frame_nums_buf == NULL)
+                return PyErr_NoMemory();
+
+        for (int32_t i = 0;
+             i < num_frames;
+             ++i) {
+                PyObject *item = PySequence_GetItem(frame_nums, i);
+                if (item == NULL)
+                        goto clean_up;
+
+                frame_nums_buf[i] = PyLong_AsLong(item);
+                Py_DECREF(item);
+                if (PyErr_Occurred())
+                        goto clean_up;
+        }
+
+        result = (PyObject *)frames;
+
+        decode_video_from_frame_nums((uint8_t *)(frames->ob_bytes),
+                                     &vid_ctx,
+                                     num_frames,
+                                     frame_nums_buf,
+                                     &rewidth,
+                                     &reheight,
+                                     should_seek);
+
+        PyMem_RawFree(frame_nums_buf);
+
+clean_up:
+        clean_up_vid_ctx(&vid_ctx);
+
+        if (result != (PyObject *)frames) {
+                Py_CLEAR(frames);
+                return result;
+        }
+
+        if (!is_size_dynamic)
+                return (PyObject *)frames;
+
+        result = Py_BuildValue("Oii", frames, rewidth, reheight);
+        Py_DECREF(frames);
+
+        return result;
+}
+
+static PyObject *
+get_num_gops(PyObject *self, PyObject *args, PyObject *kw)
+{
+        const char *filename = NULL;
+        int32_t gop_count = 0;
+
+        static char *kwlist[] = {"filename"};
+
+        if (!PyArg_ParseTupleAndKeywords(args,
+                                         kw,
+                                         "s:get_num_gops",
+                                         kwlist,
+                                         &filename))
+                return NULL;
+        struct video_stream_context vid_ctx;
+
+        int32_t status = setup_vid_stream_context3(&vid_ctx, filename);
+        if (status != LOADVID_SUCCESS) {
+                return NULL;
+        }
+        gop_count = count_frames(&vid_ctx);
+        //int64_t frame_count = vid_ctx.nb_frames;
+
+        clean_up_vid_ctx(&vid_ctx);
+
+        return Py_BuildValue("i", gop_count);
+}
+
+
 
 static PyObject *
 loadvid(PyObject *UNUSED(dummy), PyObject *args, PyObject *kw)
@@ -469,10 +924,24 @@ static PyMethodDef lintel_methods[] = {
         {"loadvid_frame_nums",
          (PyCFunction)loadvid_frame_nums,
          METH_VARARGS | METH_KEYWORDS,
-         PyDoc_STR("loadvid_frame_nums(encoded_video, frame_nums, width, height, should_seek) -> "
+         PyDoc_STR("loadvid_frame_nums(encoded_video, frame_nums, width, height, resize) -> "
                    "decoded video ByteArray object or\n"
                    "tuple(decoded video ByteArray object, width, height)\n"
                    "if width and height are not passed as arguments.")},
+
+        {"loadvid_frame_index",
+         (PyCFunction)loadvid_frame_index,
+         METH_VARARGS | METH_KEYWORDS,
+         PyDoc_STR("loadvid_frame_index(filename, frame_nums, width, height, resize) -> "
+                   "decoded video ByteArray object or\n"
+                   "tuple(decoded video ByteArray object, width, height)\n"
+                   "if width and height are not passed as arguments.")},
+
+        {"get_num_gops",
+         (PyCFunction)get_num_gops,
+         METH_VARARGS | METH_KEYWORDS,
+         PyDoc_STR("get_num_gops(encoded_video, gop_count, frame_count) -> "
+                   "decoded video ByteArray object")},
         {NULL, NULL, 0, NULL}
 };
 

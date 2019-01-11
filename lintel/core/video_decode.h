@@ -1,17 +1,20 @@
 /**
  * Copyright 2018 Brendan Duke.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * 
- *     http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *
+ * This file is part of Lintel.
+ *
+ * Lintel is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * Lintel is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+ * details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * Lintel. If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef _VIDEO_DECODE_H_
 #define _VIDEO_DECODE_H_
@@ -26,6 +29,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
+#include <libavfilter/avfilter.h>
 #ifdef __cplusplus
 };
 #endif
@@ -41,6 +45,7 @@ struct buffer_data {
         int32_t offset_bytes;
         int32_t total_size_bytes;
 };
+
 
 /**
  * struct video_stream_context - Context needed to decode and receive frames
@@ -103,6 +108,12 @@ int64_t seek_memory(void *opaque, int64_t offset64, int32_t whence);
  */
 int32_t
 setup_format_context(AVFormatContext **format_context_ptr,
+                     AVIOContext *avio_ctx,
+                     struct buffer_data *input_buf,
+                     const uint32_t buffer_size);
+
+int32_t
+setup_format_context2(AVFormatContext **format_context_ptr,
                      AVIOContext *avio_ctx,
                      struct buffer_data *input_buf,
                      const uint32_t buffer_size);
@@ -203,6 +214,10 @@ decode_video_from_frame_nums(uint8_t *dest,
                              struct video_stream_context *vid_ctx,
                              int32_t num_requested_frames,
                              const int32_t *frame_numbers,
+                             uint32_t *rewidth,
+                             uint32_t *reheight,
                              bool should_seek);
+int32_t
+count_frames(struct video_stream_context *vid_ctx);
 
 #endif // _VIDEO_DECODE_H_
