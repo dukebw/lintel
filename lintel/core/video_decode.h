@@ -38,8 +38,8 @@ extern "C" {
 
 struct buffer_data {
         const char *ptr;
-        int32_t offset_bytes;
-        int32_t total_size_bytes;
+        size_t offset_bytes;
+        size_t total_size_bytes;
 };
 
 /**

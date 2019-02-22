@@ -274,9 +274,13 @@ decode_video_to_out_buffer(uint8_t *dest,
 int32_t read_memory(void *opaque, uint8_t *buffer, int32_t buf_size_bytes)
 {
         struct buffer_data *input_buf = (struct buffer_data *)opaque;
-        int32_t bytes_remaining = (input_buf->total_size_bytes -
-                                   input_buf->offset_bytes);
-        if (bytes_remaining < buf_size_bytes)
+        size_t bytes_remaining = (input_buf->total_size_bytes -
+                                  input_buf->offset_bytes);
+        if (bytes_remaining < (size_t)buf_size_bytes)
+                /**
+                 * NOTE(brendan): buf_size_bytes is assumed to fit in int32
+                 * here, so no overflow.
+                 */
                 buf_size_bytes = bytes_remaining;
 
         memcpy(buffer,
@@ -324,8 +328,8 @@ int64_t seek_memory(void *opaque, int64_t offset64, int32_t whence)
 static AVInputFormat *
 probe_input_format(struct buffer_data *input_buf, const uint32_t buffer_size)
 {
-        const int32_t probe_buf_size_bytes = (buffer_size +
-                                              AVPROBE_PADDING_SIZE);
+        const uint32_t probe_buf_size_bytes = (buffer_size +
+                                               AVPROBE_PADDING_SIZE);
         AVProbeData probe_data = {NULL,
                                   (uint8_t *)av_malloc(probe_buf_size_bytes),
                                   probe_buf_size_bytes,

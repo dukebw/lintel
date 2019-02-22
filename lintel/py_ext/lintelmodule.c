@@ -17,6 +17,7 @@
 /**
  * Load video data.
  */
+#define PY_SSIZE_T_CLEAN
 #include "core/video_decode.h"
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
