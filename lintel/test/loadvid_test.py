@@ -86,8 +86,8 @@ def _loadvid_test_frame_nums(filename,
         i = start_frame
         frame_nums = []
         for _ in range(num_frames):
-            i += int(random.uniform(1, 4))
             frame_nums.append(i)
+            i += int(random.uniform(1, 4))
 
         result = lintel.loadvid_frame_nums(encoded_video,
                                            frame_nums=frame_nums,
